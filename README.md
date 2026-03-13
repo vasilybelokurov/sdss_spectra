@@ -117,6 +117,7 @@ This script:
 - launches one `download_sdssdr16qso_spectra.py` worker per chunk
 - gives each worker its own staging root under `OUTPUT_ROOT/_workers/worker_XX/`
 - merges all worker trees into the final unified tree under `OUTPUT_ROOT/`
+- deletes each worker staging FITS tree after a successful merge, so spectra are not stored twice
 - rewrites the combined manifest at `data/random_qso_sample_manifest.csv`
 - writes a merge report at `data/random_qso_sample_merge_report.csv`
 
@@ -188,6 +189,7 @@ The scripts use fixed, identifiable file locations.
 - worker manifests: `DATA_DIR/workers/worker_XX_manifest.csv`
 - worker logs: `DATA_DIR/workers/worker_XX.log`
 - worker stderr: `DATA_DIR/workers/worker_XX.err`
+- worker staging FITS trees live temporarily under `OUTPUT_ROOT/_workers/worker_XX/` during the run and are removed after a successful merge
 
 `plot_sdssdr16qso_spectra.py`
 
