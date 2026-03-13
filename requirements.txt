@@ -1,0 +1,5 @@
+astropy>=6
+matplotlib>=3.8
+numpy>=1.26
+psycopg2-binary>=2.9
+sdss-access>=3.0.10

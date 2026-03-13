@@ -1,0 +1,9 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.sas_cache/
+random_qso_sample_*.csv
+random_qso_sample_manifest.csv
+sample_download_manifest.csv
+plots/
