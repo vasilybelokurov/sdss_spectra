@@ -7,4 +7,5 @@ sample_download_manifest.csv
 data/random_qso_sample_*.csv
 data/random_qso_sample_manifest.csv
 data/random_qso_sample_plot_manifest.csv
+data/workers/
 plots/*.png
