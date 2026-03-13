@@ -1,31 +1,36 @@
 # SDSS DR16 Quasar Spectra Pipeline
 
-This repository builds a practical download pipeline for spectra from the spectroscopic quasar catalog `sdssdr16qso.main`.
+This repository is built around the spectroscopic quasar catalog `sdssdr16qso.main` in WSDB.
 
-The primary script:
+The workflow is intentionally split into two scripts:
 
-- draws a random sample of quasars from WSDB
-- resolves the SDSS DR16 spectrum path for each object
-- downloads the FITS spectra into a user-chosen folder
-- plots each downloaded spectrum as a PNG
-- writes CSV manifests for the sampled objects and run status
+1. `sample_and_download_sdssdr16qso.py`
+   Draw a random sample from `sdssdr16qso.main`, save the sampled catalog under `data/`, and download the spectra to a user-defined external folder.
+2. `plot_sdssdr16qso_spectra.py`
+   Read the download manifest from `data/` and render the downloaded spectra to PNGs under `plots/`.
 
-The default output location is:
-
-```text
-~/data/sdss/spectra/qso/
-```
-
-That keeps the SDSS cache, sample table, manifest, and PNG plots together in one place outside the repository.
+This keeps the large FITS files out of the repository while keeping the catalog products and quick-look figures in the working tree.
 
 ## Repository Layout
 
-- `sample_and_plot_sdssdr16qso.py`: end-to-end workflow for random sampling, downloading, and plotting
-- `download_sdssdr16qso_spectra.py`: lower-level downloader for any local export or direct WSDB query against `sdssdr16qso.main`
-- `download_sdss_spectra.py`: separate DR19 `allspec`-based downloader kept for broader SDSS discovery workflows
-- `sample_sdssdr16qso.csv`: tiny local example table for the DR16 downloader
-- `sample_targets.csv`: tiny sky-position example for the generic DR19 script
+- `sample_and_download_sdssdr16qso.py`: sample 100 quasars from WSDB and download spectra
+- `plot_sdssdr16qso_spectra.py`: read a download manifest and make PNG plots
+- `download_sdssdr16qso_spectra.py`: lower-level DR16 QSO downloader for local tables or direct WSDB queries
+- `download_sdss_spectra.py`: separate DR19 `allspec`-based downloader
+- `data/`: small example catalogs and generated sample/manifests
+- `plots/`: generated PNG plots
 - `requirements.txt`: Python dependencies
+
+Committed example data files live under `data/`:
+
+- `data/sample_sdssdr16qso.csv`
+- `data/sample_targets.csv`
+
+Generated files also default to `data/`:
+
+- `data/random_qso_sample_100.csv`
+- `data/random_qso_sample_manifest.csv`
+- `data/random_qso_sample_plot_manifest.csv`
 
 ## Dependencies
 
@@ -37,7 +42,7 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-The DR16 QSO workflow needs direct access to WSDB. These environment variables must be set:
+The WSDB-backed scripts require:
 
 ```bash
 export PGUSER=your_wsdb_username
@@ -46,31 +51,89 @@ export PGHOST=your_wsdb_host
 
 Authentication is expected through `~/.pgpass`.
 
-## Quick Start
+## Main Workflow
 
-Run the full workflow for a random sample of 100 quasars:
+### Step 1: Sample 100 quasars and download spectra
 
 ```bash
 source .venv/bin/activate
-python sample_and_plot_sdssdr16qso.py \
+python sample_and_download_sdssdr16qso.py \
   --sample-size 100 \
-  --output-root ~/data/sdss/spectra/qso/
+  --output-root ~/data/sdss/spectra/qso/ \
+  --data-dir data/
 ```
 
-This uses `spec-lite` by default, because those files are smaller and already contain the coadded spectrum needed for quick plotting.
+What this does:
 
-Typical output under `~/data/sdss/spectra/qso/`:
+- runs a random WSDB query against `sdssdr16qso.main`
+- writes the sampled rows to `data/random_qso_sample_100.csv`
+- resolves the public DR16 spectrum URLs from `plate`, `mjd`, and `fiberid`
+- downloads the FITS files to `~/data/sdss/spectra/qso/`
+- writes a per-object download manifest to `data/random_qso_sample_manifest.csv`
 
-- `random_qso_sample_100.csv`: the sampled rows from `sdssdr16qso.main`
-- `random_qso_sample_manifest.csv`: per-object status, local FITS path, local PNG path, and any error message
-- `plots/*.png`: one PNG per successfully plotted spectrum
-- `dr16/...`: downloaded spectra stored in SDSS directory layout
+The default product is `spec-lite`, which is usually the right choice for quick plotting and inspection.
 
-## How The Main Script Works
+### Step 2: Plot the downloaded spectra
 
-### 1. Query a random sample from WSDB
+```bash
+source .venv/bin/activate
+python plot_sdssdr16qso_spectra.py \
+  --manifest data/random_qso_sample_manifest.csv \
+  --plot-dir plots/ \
+  --plot-manifest data/random_qso_sample_plot_manifest.csv
+```
 
-By default the script runs:
+What this does:
+
+- reads the download manifest
+- checks which FITS files are available locally
+- extracts `flux` and `loglam` from the spectrum table HDUs
+- writes one PNG per spectrum under `plots/`
+- writes plotting status information to `data/random_qso_sample_plot_manifest.csv`
+
+## How Spectrum Resolution Works
+
+`sdssdr16qso.main` includes the classical spectroscopic identifiers:
+
+- `plate`
+- `mjd`
+- `fiberid`
+
+Those are enough to reconstruct DR16 spectrum paths via `sdss_access`.
+
+The catalog spans two reduction families, so the scripts infer `run2d` from `mjd`:
+
+- `mjd < 55176` -> legacy SDSS, `run2d=26`
+- `mjd >= 55176` -> BOSS/eBOSS, `run2d=v5_13_0`
+
+Examples:
+
+- legacy SDSS:
+  `dr16/sdss/spectro/redux/26/spectra/lite/1887/spec-1887-53239-0253.fits`
+- BOSS/eBOSS:
+  `dr16/eboss/spectro/redux/v5_13_0/spectra/lite/3586/spec-3586-55181-0756.fits`
+
+You can override the inference logic with:
+
+- `--run2d`
+- `--legacy-run2d`
+- `--boss-run2d`
+- `--boss-start-mjd`
+
+## Download Script Options
+
+Useful options for `sample_and_download_sdssdr16qso.py`:
+
+- `--output-root ~/data/sdss/spectra/qso/`: where the FITS spectra are stored
+- `--data-dir data/`: where sampled catalogs and manifests are written
+- `--sample-size 100`: number of random quasars to draw
+- `--product spec-lite`: small coadded spectra
+- `--product spec`: larger full spectra
+- `--where "z > 2.5"`: append a predicate to the default WSDB query
+- `--query "select ..."`: replace the sampling query completely
+- `--download-timeout 120`: per-file HTTP timeout in seconds
+
+The default WSDB sampling query is:
 
 ```sql
 select
@@ -88,99 +151,34 @@ order by random()
 limit 100
 ```
 
-You can modify the selection in two ways:
+## Plot Script Options
 
-- `--where "z > 2.5"` appends an extra predicate to the default query
-- `--query "select ..."` replaces the query entirely
+Useful options for `plot_sdssdr16qso_spectra.py`:
 
-### 2. Resolve the DR16 spectrum location
+- `--manifest data/random_qso_sample_manifest.csv`: input download manifest
+- `--plot-dir plots/`: output directory for PNGs
+- `--plot-manifest data/random_qso_sample_plot_manifest.csv`: plotting status table
+- `--overwrite`: replace existing PNGs instead of skipping them
 
-Each row in `sdssdr16qso.main` includes the classical spectroscopic identifiers:
-
-- `plate`
-- `mjd`
-- `fiberid`
-
-Those are enough to reconstruct DR16 spectrum paths with `sdss_access`.
-
-The catalog spans two reduction families, so the scripts infer `run2d` from `mjd`:
-
-- `mjd < 55176` -> legacy SDSS, `run2d=26`
-- `mjd >= 55176` -> BOSS/eBOSS, `run2d=v5_13_0`
-
-Examples:
-
-- legacy SDSS:
-  `dr16/sdss/spectro/redux/26/spectra/lite/1887/spec-1887-53239-0253.fits`
-- BOSS/eBOSS:
-  `dr16/eboss/spectro/redux/v5_13_0/spectra/lite/3586/spec-3586-55181-0756.fits`
-
-If you need a different reduction choice, use:
-
-- `--run2d`
-- `--legacy-run2d`
-- `--boss-run2d`
-- `--boss-start-mjd`
-
-### 3. Download the FITS files
-
-The end-to-end script sets `SAS_BASE_DIR` to the chosen `--output-root`, so the local files are written directly inside your requested destination tree.
-
-Downloads happen via the resolved public SDSS URLs. The timeout is configurable:
-
-```bash
---download-timeout 120
-```
-
-If a download fails or times out, the script keeps going and records the failure in `random_qso_sample_manifest.csv`.
-
-### 4. Plot each spectrum
-
-For each downloaded FITS file, the script searches the binary table HDUs for columns named:
+The plotting script looks for the first binary-table HDU with:
 
 - `flux`
 - `loglam`
 
-It then computes:
+It then computes wavelength as `10 ** loglam` and plots flux versus wavelength.
 
-- wavelength = `10 ** loglam`
-- flux = `flux`
+## Lower-Level Downloader
 
-and writes a PNG plot for that spectrum to the `plots/` directory.
+`download_sdssdr16qso_spectra.py` remains available when you want to work from a local export of `sdssdr16qso.main` or run a direct WSDB query without the random-sampling wrapper.
 
-Plot failures are also recorded in the manifest so partial runs remain inspectable.
-
-## Important Options
-
-For `sample_and_plot_sdssdr16qso.py`:
-
-- `--output-root ~/data/sdss/spectra/qso/`: choose where spectra, plots, and manifests are written
-- `--sample-size 100`: choose the random sample size
-- `--product spec-lite`: small coadded spectra for quick work
-- `--product spec`: larger full spectra
-- `--where "z > 2.5"`: restrict the sample
-- `--query "select ..."`: replace the sampling query completely
-- `--download-timeout 120`: per-file HTTP timeout in seconds
-- `--skip-download`: only make PNGs for spectra already present locally
-
-For `download_sdssdr16qso_spectra.py`:
-
-- `sample_sdssdr16qso.csv`: use a local export as input
-- `--from-wsdb`: query `sdssdr16qso.main` directly
-- `--include-duplicates`: also try duplicate plate/mjd/fiber combinations
-- `--manifest path.csv`: choose the downloader manifest path
-- `--dry-run`: resolve paths without downloading files
-
-## Lower-Level Downloader Examples
-
-Download from a local CSV export:
+Example with the committed sample CSV:
 
 ```bash
 source .venv/bin/activate
-python download_sdssdr16qso_spectra.py sample_sdssdr16qso.csv
+python download_sdssdr16qso_spectra.py data/sample_sdssdr16qso.csv
 ```
 
-Download directly from WSDB:
+Direct WSDB example:
 
 ```bash
 source .venv/bin/activate
@@ -190,16 +188,6 @@ python download_sdssdr16qso_spectra.py \
   --limit 100
 ```
 
-Resolve paths only:
+## DR19 Script
 
-```bash
-source .venv/bin/activate
-python download_sdssdr16qso_spectra.py \
-  --from-wsdb \
-  --limit 10 \
-  --dry-run
-```
-
-## Notes On The Generic DR19 Script
-
-`download_sdss_spectra.py` is a separate path that follows the official DR19 `allspec` workflow. It is useful when you want broad SDSS spectrum discovery from positions on the sky, but it is not required for the DR16 quasar pipeline built around `sdssdr16qso.main`.
+`download_sdss_spectra.py` is separate from the DR16 QSO pipeline. It follows the official DR19 `allspec` workflow and is useful for broader SDSS spectrum discovery from positions on the sky.

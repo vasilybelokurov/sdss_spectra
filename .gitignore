@@ -3,7 +3,8 @@
 __pycache__/
 *.pyc
 .sas_cache/
-random_qso_sample_*.csv
-random_qso_sample_manifest.csv
 sample_download_manifest.csv
-plots/
+data/random_qso_sample_*.csv
+data/random_qso_sample_manifest.csv
+data/random_qso_sample_plot_manifest.csv
+plots/*.png
