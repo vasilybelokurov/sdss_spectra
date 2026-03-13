@@ -103,6 +103,52 @@ What this does:
 
 Those are enough to reconstruct DR16 spectrum paths via `sdss_access`.
 
+## Bookkeeping Needed To Build Paths
+
+The downloader does not need the full quasar record to find a spectrum file. For path resolution, it only needs the bookkeeping fields that identify one SDSS spectrum product:
+
+- `plate`: spectroscopic plate identifier
+- `mjd`: observing Modified Julian Date
+- `fiberid`: fiber number on that plate
+- `run2d`: reduction version
+- `product`: `spec-lite` or `spec`
+- `release`: DR16 in this project
+
+Where those values come from:
+
+- `plate`, `mjd`, `fiberid` come directly from `sdssdr16qso.main`
+- `product` comes from the command-line option, defaulting to `spec-lite`
+- `release` comes from the command-line option, defaulting to `dr16`
+- `run2d` is inferred by the script from `mjd`, unless you override it
+
+The other columns pulled from WSDB are not needed to construct the path itself:
+
+- `sdss_name`: used for readable progress logs and plot titles
+- `ra`, `dec`: kept in the sampled catalog and manifest for bookkeeping
+- `z`: kept in the manifest and used in plot titles
+- `thing_id`: kept in the sampled catalog and manifest as an object identifier
+
+So the path-building chain is:
+
+1. Query `sdssdr16qso.main` in WSDB
+2. Read `plate`, `mjd`, and `fiberid` from each row
+3. Infer `run2d` from `mjd`
+4. Pass `release`, `product`, `run2d`, `plateid`, `mjd`, and `fiberid` to `sdss_access`
+5. Let `sdss_access` resolve the SAS path and download it into the local SAS-style cache
+
+For example, one sampled row might contribute:
+
+- `plate=6197`
+- `mjd=56191`
+- `fiberid=962`
+- inferred `run2d=v5_13_0`
+- `product=spec-lite`
+- `release=dr16`
+
+That resolves to a SAS path like:
+
+`dr16/boss/spectro/redux/v5_13_0/spectra/lite/6197/spec-6197-56191-0962.fits`
+
 The catalog spans two reduction families, so the scripts infer `run2d` from `mjd`:
 
 - `mjd < 55176` -> legacy SDSS, `run2d=26`
