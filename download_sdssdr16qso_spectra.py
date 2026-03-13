@@ -116,10 +116,22 @@ def parse_args() -> argparse.Namespace:
         help="Enable verbose sdss_access output.",
     )
     parser.add_argument(
+        "--download-method",
+        choices=["access", "http"],
+        default="access",
+        help="Download backend. Default: access",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10,
+        help="Number of spectra to queue per sdss_access batch. Default: 10",
+    )
+    parser.add_argument(
         "--download-timeout",
         type=int,
         default=120,
-        help="HTTP timeout in seconds per spectrum download. Default: 120",
+        help="HTTP timeout in seconds per spectrum download when --download-method=http. Default: 120",
     )
 
     wsdb_group = parser.add_argument_group("WSDB source")
@@ -377,6 +389,23 @@ def download_file(url: str, local_path: Path, timeout: int = 120) -> None:
             handle.write(chunk)
 
 
+def download_batch_with_access(args: argparse.Namespace, batch_rows: list[dict]) -> int | None:
+    from sdss_access import Access
+
+    access = Access(release=args.release, verbose=args.verbose)
+    access.remote()
+    for row in batch_rows:
+        access.add(
+            row["product"],
+            run2d=row["run2d"],
+            plateid=row["plate"],
+            mjd=row["mjd"],
+            fiberid=row["fiberid"],
+        )
+    access.set_stream()
+    return access.commit(follow_symlinks=False)
+
+
 def write_manifest(manifest_path: Path, rows: list[dict]) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -394,6 +423,7 @@ def write_manifest(manifest_path: Path, rows: list[dict]) -> None:
         "status",
         "error",
         "local_path",
+        "remote_url",
     ]
     with manifest_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -422,23 +452,21 @@ def main() -> int:
 
     manifest_rows: list[dict] = []
     queued_files: set[Path] = set()
+    pending_indices: list[int] = []
 
-    for row in expanded_rows:
+    for index, row in enumerate(expanded_rows, start=1):
         row_run2d = infer_run2d(args, row)
         local_path = resolve_local_path(sdss_path, args.product, row_run2d, row)
         status = "cached" if local_path.exists() else "pending_download"
         error = ""
         remote_url = resolve_remote_url(sdss_path, args.product, row_run2d, row)
-        if not args.dry_run and not local_path.exists() and local_path not in queued_files:
-            try:
-                download_file(remote_url, local_path, timeout=args.download_timeout)
-                status = "downloaded_or_cached" if local_path.exists() else "download_failed"
-            except Exception as exc:
-                status = "download_failed"
-                error = str(exc)
-            queued_files.add(local_path)
-        elif not args.dry_run and local_path.exists():
+        if not args.dry_run and local_path.exists():
             status = "downloaded_or_cached"
+        elif not args.dry_run and local_path in queued_files:
+            status = "queued_duplicate"
+        elif not args.dry_run:
+            status = "queued"
+            queued_files.add(local_path)
 
         manifest_rows.append(
             {
@@ -456,11 +484,66 @@ def main() -> int:
                 "status": status if args.dry_run else status,
                 "error": error,
                 "local_path": str(local_path),
+                "remote_url": remote_url,
             }
         )
+        if status == "queued":
+            pending_indices.append(len(manifest_rows) - 1)
+        if not args.dry_run:
+            print(
+                f"[{index}/{len(expanded_rows)}] prepared {row['object_name']} "
+                f"status={status} plate={row['plate']} mjd={row['mjd']} fiber={int(row['fiberid']):04d}",
+                flush=True,
+            )
 
     manifest_path = Path(args.manifest).expanduser().resolve()
     write_manifest(manifest_path, manifest_rows)
+
+    if not args.dry_run and pending_indices:
+        for batch_start in range(0, len(pending_indices), args.batch_size):
+            batch_chunk = pending_indices[batch_start : batch_start + args.batch_size]
+            batch_rows = [manifest_rows[idx] for idx in batch_chunk]
+            batch_number = (batch_start // args.batch_size) + 1
+            batch_total = math.ceil(len(pending_indices) / args.batch_size)
+            row_labels = ", ".join(
+                f"{row['plate']}-{row['mjd']}-{int(row['fiberid']):04d}" for row in batch_rows
+            )
+            print(
+                f"Starting batch {batch_number}/{batch_total} with {len(batch_rows)} spectra: {row_labels}",
+                flush=True,
+            )
+            batch_error = ""
+            if args.download_method == "access":
+                try:
+                    download_batch_with_access(args, batch_rows)
+                except Exception as exc:
+                    batch_error = str(exc)
+            else:
+                for row in batch_rows:
+                    try:
+                        download_file(
+                            row["remote_url"],
+                            Path(row["local_path"]),
+                            timeout=args.download_timeout,
+                        )
+                    except Exception as exc:
+                        batch_error = str(exc)
+                        row["error"] = str(exc)
+            for idx in batch_chunk:
+                row = manifest_rows[idx]
+                local_path = Path(row["local_path"])
+                if local_path.exists():
+                    row["status"] = "downloaded_or_cached"
+                    row["error"] = ""
+                else:
+                    row["status"] = "download_failed"
+                    row["error"] = row["error"] or batch_error or "download failed"
+                print(
+                    f"Completed {row['object_name']} status={row['status']} "
+                    f"plate={row['plate']} mjd={row['mjd']} fiber={int(row['fiberid']):04d}",
+                    flush=True,
+                )
+            write_manifest(manifest_path, manifest_rows)
 
     print(f"Source: {source_label}")
     print(f"SAS cache: {Path(os.environ['SAS_BASE_DIR']).expanduser()}")

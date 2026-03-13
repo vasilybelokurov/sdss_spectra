@@ -71,6 +71,8 @@ What this does:
 - downloads the FITS files to `~/data/sdss/spectra/qso/`
 - writes a per-object download manifest to `data/random_qso_sample_manifest.csv`
 
+By default the downloader uses `sdss_access.Access`, which selects `RsyncAccess` automatically on macOS and Linux. Downloads are queued in batches and committed with `follow_symlinks=False` so the local cache keeps the SAS directory structure.
+
 The default product is `spec-lite`, which is usually the right choice for quick plotting and inspection.
 
 ### Step 2: Plot the downloaded spectra
@@ -127,11 +129,14 @@ Useful options for `sample_and_download_sdssdr16qso.py`:
 - `--output-root ~/data/sdss/spectra/qso/`: where the FITS spectra are stored
 - `--data-dir data/`: where sampled catalogs and manifests are written
 - `--sample-size 100`: number of random quasars to draw
+- `--download-method access`: use `sdss_access` batch downloads; this is the default and fastest option here
+- `--download-method http`: fall back to sequential direct HTTP downloads
+- `--batch-size 10`: number of spectra to queue per `sdss_access` batch
 - `--product spec-lite`: small coadded spectra
 - `--product spec`: larger full spectra
 - `--where "z > 2.5"`: append a predicate to the default WSDB query
 - `--query "select ..."`: replace the sampling query completely
-- `--download-timeout 120`: per-file HTTP timeout in seconds
+- `--download-timeout 120`: per-file timeout when `--download-method=http`
 
 The default WSDB sampling query is:
 

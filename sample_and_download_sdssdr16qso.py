@@ -9,7 +9,11 @@ import os
 import sys
 from pathlib import Path
 
-from download_sdssdr16qso_spectra import download_file, infer_run2d
+from download_sdssdr16qso_spectra import (
+    download_batch_with_access,
+    download_file,
+    infer_run2d,
+)
 
 
 DEFAULT_SQL = """
@@ -99,10 +103,22 @@ def parse_args() -> argparse.Namespace:
         help="Enable verbose sdss_access output.",
     )
     parser.add_argument(
+        "--download-method",
+        choices=["access", "http"],
+        default="access",
+        help="Download backend. Default: access",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10,
+        help="Number of spectra to queue per sdss_access batch. Default: 10",
+    )
+    parser.add_argument(
         "--download-timeout",
         type=int,
         default=120,
-        help="HTTP timeout in seconds per spectrum download. Default: 120",
+        help="HTTP timeout in seconds per spectrum download when --download-method=http. Default: 120",
     )
     return parser.parse_args()
 
@@ -242,6 +258,7 @@ def main() -> int:
 
     manifest_rows: list[dict] = []
     queued: set[Path] = set()
+    pending_indices: list[int] = []
     downloaded = 0
     failed = 0
     cached = 0
@@ -250,12 +267,6 @@ def main() -> int:
         run2d = infer_run2d(args, row)
         spectrum_path = resolve_local_path(sdss_path, args.product, row, args)
         remote_url = resolve_remote_url(sdss_path, args.product, row, args)
-        print(
-            f"[{index}/{len(rows)}] starting {row['sdss_name']} "
-            f"plate={row['plate']} mjd={row['mjd']} fiber={int(row['fiberid']):04d}",
-            flush=True,
-        )
-
         if spectrum_path.exists():
             status = "cached"
             error = ""
@@ -264,19 +275,8 @@ def main() -> int:
             status = "queued_duplicate"
             error = ""
         else:
-            try:
-                download_file(remote_url, spectrum_path, timeout=args.download_timeout)
-            except Exception as exc:
-                status = "download_failed"
-                error = str(exc)
-                failed += 1
-            else:
-                status = "downloaded" if spectrum_path.exists() else "download_failed"
-                error = ""
-                if status == "downloaded":
-                    downloaded += 1
-                else:
-                    failed += 1
+            status = "queued"
+            error = ""
             queued.add(spectrum_path)
 
         manifest_row = {
@@ -296,13 +296,65 @@ def main() -> int:
             "error": error,
         }
         manifest_rows.append(manifest_row)
+        if status == "queued":
+            pending_indices.append(len(manifest_rows) - 1)
 
         write_manifest(manifest_path, manifest_rows)
         print(
-            f"[{index}/{len(rows)}] {status} {row['sdss_name']} "
+            f"[{index}/{len(rows)}] prepared {row['sdss_name']} "
+            f"status={status} "
             f"plate={row['plate']} mjd={row['mjd']} fiber={int(row['fiberid']):04d}",
             flush=True,
         )
+
+    for batch_start in range(0, len(pending_indices), args.batch_size):
+        batch_chunk = pending_indices[batch_start : batch_start + args.batch_size]
+        batch_rows = [manifest_rows[idx] for idx in batch_chunk]
+        if not batch_rows:
+            continue
+        batch_number = (batch_start // args.batch_size) + 1
+        batch_total = (len(pending_indices) + args.batch_size - 1) // args.batch_size
+        labels = ", ".join(
+            f"{row['plate']}-{row['mjd']}-{int(row['fiberid']):04d}" for row in batch_rows
+        )
+        print(
+            f"Starting batch {batch_number}/{batch_total} with {len(batch_rows)} spectra: {labels}",
+            flush=True,
+        )
+        batch_error = ""
+        if args.download_method == "access":
+            try:
+                download_batch_with_access(args, batch_rows)
+            except Exception as exc:
+                batch_error = str(exc)
+        else:
+            for row in batch_rows:
+                try:
+                    download_file(
+                        row["remote_url"],
+                        Path(row["spectrum_path"]),
+                        timeout=args.download_timeout,
+                    )
+                except Exception as exc:
+                    row["error"] = str(exc)
+                    batch_error = batch_error or str(exc)
+        for idx in batch_chunk:
+            row = manifest_rows[idx]
+            spectrum_path = Path(row["spectrum_path"])
+            if spectrum_path.exists():
+                row["status"] = "downloaded"
+                row["error"] = ""
+                downloaded += 1
+            else:
+                row["status"] = "download_failed"
+                row["error"] = row["error"] or batch_error or "download failed"
+                failed += 1
+            print(
+                f"Completed {row['sdss_name']} status={row['status']} "
+                f"plate={row['plate']} mjd={row['mjd']} fiber={int(row['fiberid']):04d}",
+                flush=True,
+            )
+        write_manifest(manifest_path, manifest_rows)
 
     print(f"Output root: {output_root}")
     print(f"Data dir: {data_dir}")
