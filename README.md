@@ -46,7 +46,9 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-The WSDB-backed sampling script requires:
+The WSDB-backed sampling script reads `PGUSER` and `PGHOST` from the shell environment. They do not need to be passed as command-line arguments, but they do need to be set before you run the sampler.
+
+If they are not already set in your shell, export them first:
 
 ```bash
 export PGUSER=your_wsdb_username
